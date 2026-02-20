@@ -4,8 +4,10 @@ A minimal, draggable, transparent clock that floats above all windows.
 Built with PyQt6 for rounded corners, drop shadow, and crisp DPI rendering.
 """
 
+import os
 import sys
 import time
+import winreg
 
 from PyQt6.QtCore import Qt, QTimer, QPoint
 from PyQt6.QtGui import QAction, QMouseEvent, QColor
@@ -28,8 +30,13 @@ SHOW_DATE = True                  # Display date below time
 BG_COLOR = "#0a0a0a"              # Near-black background
 TIME_COLOR = "#f0f0f0"            # White for time digits
 DATE_COLOR = "#b0b0b0"            # Light grey for date
+STOPWATCH_COLOR = "#6bff6b"       # Green accent for stopwatch display
 BORDER_COLOR = "#1a1a1a"          # Subtle dark border
 BORDER_RADIUS = 8                 # Rounded corner radius in px
+
+# Registry key for Windows startup
+_REGISTRY_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_REGISTRY_VALUE_NAME = "ClockWidget"
 
 # ─── QSS Styles ─────────────────────────────────────────────────
 CONTAINER_STYLE = f"""
@@ -43,6 +50,16 @@ CONTAINER_STYLE = f"""
 TIME_LABEL_STYLE = f"""
     QLabel {{
         color: {TIME_COLOR};
+        background-color: transparent;
+        font-family: Consolas;
+        font-size: 24pt;
+        font-weight: bold;
+    }}
+"""
+
+STOPWATCH_LABEL_STYLE = f"""
+    QLabel {{
+        color: {STOPWATCH_COLOR};
         background-color: transparent;
         font-family: Consolas;
         font-size: 24pt;
@@ -93,6 +110,8 @@ class ClockWidget(QWidget):
     3. Place time and date labels inside the frame.
     4. Use a QTimer to refresh the display every 200ms.
     5. Handle drag-to-move via mouse events, right-click via contextMenuEvent.
+    6. Stopwatch mode reuses the same timer and time label with a green accent.
+    7. Windows startup toggle reads/writes HKCU Run registry key.
     """
 
     def __init__(self):
@@ -100,7 +119,7 @@ class ClockWidget(QWidget):
         Algorithm:
         1. Set window flags: frameless, always-on-top, tool (no taskbar entry).
         2. Set translucent background so rounded corners show through.
-        3. Initialize toggle state as instance variables.
+        3. Initialize toggle and stopwatch state as instance variables.
         4. Build the UI (container, labels, shadow) and context menu.
         5. Populate labels with current time before measuring size.
         6. Position widget at top-right of screen.
@@ -123,6 +142,11 @@ class ClockWidget(QWidget):
         self._show_date = SHOW_DATE
         self._always_on_top = True
         self._drag_position = None
+
+        # Stopwatch state
+        self._stopwatch_running = False
+        self._stopwatch_elapsed_ms = 0
+        self._stopwatch_last_tick = None
 
         # Build widgets and context menu
         self._build_ui()
@@ -188,14 +212,14 @@ class ClockWidget(QWidget):
 
     def _build_context_menu(self):
         """
-        Creates the right-click menu with checkable toggle actions and a
-        close action.
+        Creates the right-click menu with checkable toggle actions, a stopwatch
+        submenu, and a close action.
 
         Algorithm:
         1. Create a QMenu styled to match the dark theme.
         2. Add checkable actions for always-on-top, 24h format, seconds.
-        3. Set their initial checked state from instance variables.
-        4. Connect each to its toggle method.
+        3. Add checkable action for startup with Windows.
+        4. Add a Stopwatch submenu with Start, Stop, Reset actions.
         5. Add a separator and a Close action.
         """
         self._context_menu = QMenu(self)
@@ -221,6 +245,33 @@ class ClockWidget(QWidget):
         self._seconds_action.setChecked(self._show_seconds)
         self._seconds_action.triggered.connect(self._toggle_seconds)
         self._context_menu.addAction(self._seconds_action)
+
+        # Start with Windows - checkable toggle using registry
+        self._startup_action = QAction("Start with Windows", self)
+        self._startup_action.setCheckable(True)
+        self._startup_action.setChecked(self._is_startup_enabled())
+        self._startup_action.triggered.connect(self._toggle_startup)
+        self._context_menu.addAction(self._startup_action)
+
+        self._context_menu.addSeparator()
+
+        # Stopwatch submenu
+        stopwatch_menu = QMenu("Stopwatch", self)
+        stopwatch_menu.setStyleSheet(MENU_STYLE)
+
+        start_action = QAction("Start", self)
+        start_action.triggered.connect(self._stopwatch_start)
+        stopwatch_menu.addAction(start_action)
+
+        stop_action = QAction("Stop", self)
+        stop_action.triggered.connect(self._stopwatch_stop)
+        stopwatch_menu.addAction(stop_action)
+
+        reset_action = QAction("Reset", self)
+        reset_action.triggered.connect(self._stopwatch_reset)
+        stopwatch_menu.addAction(reset_action)
+
+        self._context_menu.addMenu(stopwatch_menu)
 
         self._context_menu.addSeparator()
 
@@ -248,17 +299,32 @@ class ClockWidget(QWidget):
         y = screen.top() + margin
         self.move(x, y)
 
+    # ── Clock / Stopwatch display ────────────────────────────────
     def _update_clock(self):
         """
-        Reads current local time and updates the time and date labels.
+        Refreshes the time label with either clock or stopwatch display.
 
         Algorithm:
-        1. Get current time via time.localtime().
-        2. Build format string from _clock_format_24h and _show_seconds flags.
-        3. Set the time label text.
-        4. Build date string in "Friday, Feb 20 2026" format.
-        5. Set or clear the date label based on _show_date.
+        1. If stopwatch is running, accumulate elapsed time from monotonic clock,
+           format as HH:MM:SS, display in green accent style.
+        2. If stopwatch is paused (elapsed > 0 but not running), show frozen value.
+        3. Otherwise, show normal clock time and date.
         """
+        if self._stopwatch_running:
+            # Accumulate elapsed time using monotonic clock for accuracy
+            now_mono = time.monotonic()
+            self._stopwatch_elapsed_ms += (now_mono - self._stopwatch_last_tick) * 1000
+            self._stopwatch_last_tick = now_mono
+            self._show_stopwatch_display()
+            return
+
+        if self._stopwatch_elapsed_ms > 0:
+            # Paused: show frozen stopwatch value
+            self._show_stopwatch_display()
+            return
+
+        # Normal clock display
+        self._time_label.setStyleSheet(TIME_LABEL_STYLE)
         now = time.localtime()
 
         if self._clock_format_24h:
@@ -274,6 +340,122 @@ class ClockWidget(QWidget):
         else:
             self._date_label.hide()
 
+    def _show_stopwatch_display(self):
+        """
+        Formats the accumulated stopwatch milliseconds as HH:MM:SS and
+        displays it in the time label with green accent styling.
+
+        Algorithm:
+        1. Convert elapsed_ms to total seconds.
+        2. Compute hours, minutes, seconds.
+        3. Format as zero-padded HH:MM:SS string.
+        4. Apply green stopwatch style and set text.
+        5. Hide the date label (not relevant in stopwatch mode).
+        """
+        total_secs = int(self._stopwatch_elapsed_ms / 1000)
+        hrs = total_secs // 3600
+        mins = (total_secs % 3600) // 60
+        secs = total_secs % 60
+        self._time_label.setStyleSheet(STOPWATCH_LABEL_STYLE)
+        self._time_label.setText(f"{hrs:02d}:{mins:02d}:{secs:02d}")
+        self._date_label.setText("Stopwatch")
+        self._date_label.show()
+
+    def _stopwatch_start(self):
+        """
+        Starts or resumes the stopwatch.
+
+        Algorithm:
+        1. Record current monotonic time as the tick reference.
+        2. Set running flag to True.
+        """
+        self._stopwatch_last_tick = time.monotonic()
+        self._stopwatch_running = True
+
+    def _stopwatch_stop(self):
+        """
+        Pauses the stopwatch, preserving accumulated elapsed time.
+
+        Algorithm:
+        1. If running, accumulate final delta from last tick.
+        2. Set running flag to False.
+        """
+        if self._stopwatch_running:
+            now_mono = time.monotonic()
+            self._stopwatch_elapsed_ms += (now_mono - self._stopwatch_last_tick) * 1000
+            self._stopwatch_running = False
+
+    def _stopwatch_reset(self):
+        """
+        Resets the stopwatch to zero and reverts to normal clock display.
+
+        Algorithm:
+        1. Set running to False, elapsed to 0, last_tick to None.
+        2. Restore the time label style to normal clock.
+        3. Call _update_clock() to immediately show the clock.
+        """
+        self._stopwatch_running = False
+        self._stopwatch_elapsed_ms = 0
+        self._stopwatch_last_tick = None
+        self._time_label.setStyleSheet(TIME_LABEL_STYLE)
+        self._update_clock()
+
+    # ── Windows startup registry ─────────────────────────────────
+    def _is_startup_enabled(self):
+        """
+        Checks if the ClockWidget registry value exists in the HKCU Run key.
+
+        Algorithm:
+        1. Open the HKCU Run registry key for reading.
+        2. Try to query the ClockWidget value.
+        3. Return True if it exists, False otherwise.
+
+        Returns:
+            bool - True if the startup registry entry exists.
+        """
+        try:
+            # Open HKCU Run key and check for our value
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _REGISTRY_KEY) as key:
+                winreg.QueryValueEx(key, _REGISTRY_VALUE_NAME)
+                return True
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return False
+
+    def _toggle_startup(self):
+        """
+        Toggles the Windows startup registry entry. If it exists, delete it.
+        If it doesn't, create it pointing to pythonw.exe with this script.
+
+        Algorithm:
+        1. Check if startup is currently enabled.
+        2. If enabled: open the Run key and delete the ClockWidget value.
+        3. If disabled: build the command string using pythonw.exe and the
+           absolute path to this script, then write it to the registry.
+        """
+        if self._is_startup_enabled():
+            # Remove the registry entry
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_SET_VALUE
+            ) as key:
+                winreg.DeleteValue(key, _REGISTRY_VALUE_NAME)
+        else:
+            # Build command: use pythonw.exe to avoid a console window on startup
+            python_dir = os.path.dirname(sys.executable)
+            pythonw = os.path.join(python_dir, "pythonw.exe")
+            script_path = os.path.abspath(__file__)
+            command = f'"{pythonw}" "{script_path}"'
+
+            # Write the registry entry
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER, _REGISTRY_KEY, 0, winreg.KEY_SET_VALUE
+            ) as key:
+                winreg.SetValueEx(
+                    key, _REGISTRY_VALUE_NAME, 0, winreg.REG_SZ, command
+                )
+
+    # ── Toggle methods ───────────────────────────────────────────
     def _toggle_topmost(self):
         """
         Toggles the always-on-top window flag.
@@ -351,6 +533,7 @@ class ClockWidget(QWidget):
         self._topmost_action.setChecked(self._always_on_top)
         self._format_action.setChecked(self._clock_format_24h)
         self._seconds_action.setChecked(self._show_seconds)
+        self._startup_action.setChecked(self._is_startup_enabled())
         self._context_menu.exec(event.globalPos())
 
 
