@@ -24,7 +24,7 @@ from PyQt6.QtWidgets import (
 
 # ─── Configuration ──────────────────────────────────────────────
 CLOCK_FORMAT_24H = True           # True for 24-hour, False for 12-hour
-SHOW_SECONDS = True               # Display seconds
+SHOW_SECONDS = False              # Display seconds
 SHOW_DATE = True                  # Display date below time
 
 # Theme: white on black
