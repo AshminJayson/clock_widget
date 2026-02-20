@@ -4,6 +4,7 @@ A minimal, draggable, transparent clock that floats above all windows.
 Built with PyQt6 for rounded corners, drop shadow, and crisp DPI rendering.
 """
 
+import ctypes
 import os
 import sys
 import time
@@ -537,7 +538,33 @@ class ClockWidget(QWidget):
         self._context_menu.exec(event.globalPos())
 
 
+def _acquire_single_instance_lock():
+    """
+    Attempts to create a Windows named mutex to enforce single-instance.
+
+    Algorithm:
+    1. Call CreateMutexW with a unique name for this app.
+    2. Check GetLastError() -- ERROR_ALREADY_EXISTS (183) means another
+       instance holds the mutex.
+    3. If another instance exists, return False. Otherwise return True.
+    4. The mutex handle is intentionally kept alive (not closed) for the
+       lifetime of the process. Windows releases it on process exit.
+
+    Returns:
+        bool - True if this is the first instance, False if another is running.
+    """
+    # CreateMutexW returns a handle; if the mutex already exists, GetLastError
+    # returns ERROR_ALREADY_EXISTS but the handle is still valid.
+    handle = ctypes.windll.kernel32.CreateMutexW(None, False, "ClockWidget_SingleInstance")
+    if ctypes.windll.kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        return False
+    return handle != 0
+
+
 if __name__ == "__main__":
+    if not _acquire_single_instance_lock():
+        sys.exit(0)
+
     app = QApplication(sys.argv)
     widget = ClockWidget()
     widget.show()
