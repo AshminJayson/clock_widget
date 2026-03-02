@@ -10,8 +10,8 @@ import sys
 import time
 import winreg
 
-from PyQt6.QtCore import Qt, QTimer, QPoint
-from PyQt6.QtGui import QAction, QMouseEvent, QColor
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtGui import QAction, QColor
 from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
@@ -142,7 +142,6 @@ class ClockWidget(QWidget):
         self._show_seconds = SHOW_SECONDS
         self._show_date = SHOW_DATE
         self._always_on_top = True
-        self._drag_position = None
 
         # Stopwatch state
         self._stopwatch_running = False
@@ -487,40 +486,6 @@ class ClockWidget(QWidget):
         self._show_seconds = not self._show_seconds
         self._update_clock()
 
-    # ── Mouse events for drag-to-move ────────────────────────────
-    def mousePressEvent(self, event: QMouseEvent):
-        """
-        Records the cursor offset from the window's top-left at drag start.
-
-        Args:
-            event: QMouseEvent with button and global position.
-        """
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_position = (
-                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
-            )
-            event.accept()
-
-    def mouseMoveEvent(self, event: QMouseEvent):
-        """
-        Moves the window to follow the cursor during a drag.
-
-        Args:
-            event: QMouseEvent with current global position.
-        """
-        if self._drag_position is not None:
-            self.move(event.globalPosition().toPoint() - self._drag_position)
-            event.accept()
-
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        """
-        Clears drag state when the mouse button is released.
-
-        Args:
-            event: QMouseEvent (button release).
-        """
-        self._drag_position = None
-        event.accept()
 
     def contextMenuEvent(self, event):
         """
