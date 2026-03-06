@@ -11,7 +11,7 @@ import time
 import winreg
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QAction, QColor
+from PyQt6.QtGui import QAction, QColor, QMouseEvent
 from PyQt6.QtWidgets import (
     QApplication,
     QWidget,
@@ -142,6 +142,8 @@ class ClockWidget(QWidget):
         self._show_seconds = SHOW_SECONDS
         self._show_date = SHOW_DATE
         self._always_on_top = True
+        self._draggable = False
+        self._drag_position = None
 
         # Stopwatch state
         self._stopwatch_running = False
@@ -252,6 +254,13 @@ class ClockWidget(QWidget):
         self._startup_action.setChecked(self._is_startup_enabled())
         self._startup_action.triggered.connect(self._toggle_startup)
         self._context_menu.addAction(self._startup_action)
+
+        # Draggable - checkable toggle, off by default (locked at top-right)
+        self._draggable_action = QAction("Draggable", self)
+        self._draggable_action.setCheckable(True)
+        self._draggable_action.setChecked(self._draggable)
+        self._draggable_action.triggered.connect(self._toggle_draggable)
+        self._context_menu.addAction(self._draggable_action)
 
         self._context_menu.addSeparator()
 
@@ -486,6 +495,48 @@ class ClockWidget(QWidget):
         self._show_seconds = not self._show_seconds
         self._update_clock()
 
+    def _toggle_draggable(self):
+        """Flips draggable mode. When disabled, resets position to top-right."""
+        self._draggable = not self._draggable
+        if not self._draggable:
+            self._drag_position = None
+            self._position_top_right()
+
+    # ── Mouse events for drag-to-move (only when draggable) ──────
+    def mousePressEvent(self, event: QMouseEvent):
+        """
+        Records the cursor offset from the window's top-left at drag start,
+        only if draggable mode is enabled.
+
+        Args:
+            event: QMouseEvent with button and global position.
+        """
+        if self._draggable and event.button() == Qt.MouseButton.LeftButton:
+            self._drag_position = (
+                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            )
+            event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent):
+        """
+        Moves the window to follow the cursor during a drag.
+
+        Args:
+            event: QMouseEvent with current global position.
+        """
+        if self._draggable and self._drag_position is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_position)
+            event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent):
+        """
+        Clears drag state when the mouse button is released.
+
+        Args:
+            event: QMouseEvent (button release).
+        """
+        self._drag_position = None
+        event.accept()
 
     def contextMenuEvent(self, event):
         """
@@ -500,6 +551,7 @@ class ClockWidget(QWidget):
         self._format_action.setChecked(self._clock_format_24h)
         self._seconds_action.setChecked(self._show_seconds)
         self._startup_action.setChecked(self._is_startup_enabled())
+        self._draggable_action.setChecked(self._draggable)
         self._context_menu.exec(event.globalPos())
 
 
