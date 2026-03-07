@@ -17,6 +17,20 @@ python main.py       # PyQt6 version
 python main_tk.py    # tkinter version
 ```
 
+## Process management
+The clock runs as `pythonw.exe` (windowless Python). A single-instance mutex prevents duplicates.
+
+```bash
+# Check for running instances
+tasklist //FO CSV | grep -i "pythonw"
+
+# Kill all instances
+taskkill //F //IM pythonw.exe
+
+# Start a new instance (from project root)
+source .venv/Scripts/activate && pythonw main.py &
+```
+
 ## Architecture
 Both versions are single-file, single-class implementations. No modules, no packages. Configuration constants live at the top of each file. The widget is a frameless, always-on-top, draggable window with a right-click context menu.
 
